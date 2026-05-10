@@ -39,14 +39,21 @@ async function transcribeAudio(buffer, originalName, mimeType) {
   // Groq's transcription API needs a File-like object with a name & type
   const file = new File([buffer], originalName, { type: mimeType })
 
+  // FIX: removed `language: 'ar'` — forcing Arabic caused Whisper to mistranslate
+  // non-Arabic speech and ignore mixed Arabic/English audio correctly.
+  // Whisper auto-detects the language when no `language` param is passed.
+  // FIX: use response_format: 'verbose_json' so result always has a .text field
+  // (plain 'text' format returns a raw string which some SDK versions wrap in an object).
   const result = await groq.audio.transcriptions.create({
     file,
     model:           'whisper-large-v3',
-    response_format: 'text',
-    language:        'ar',   // handles Arabic + auto-detects other languages
+    response_format: 'verbose_json',
   })
 
-  return typeof result === 'string' ? result : result.text || ''
+  // verbose_json always returns an object with .text
+  if (result && typeof result === 'object' && result.text) return result.text.trim()
+  if (typeof result === 'string') return result.trim()
+  return ''
 }
 
 // ── Extract text from PDF ──────────────────────────────────────────────────
