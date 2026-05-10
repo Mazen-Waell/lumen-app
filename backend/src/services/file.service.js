@@ -3,13 +3,6 @@ const { supabase }   = require('../lib/db')
 const Groq           = require('groq-sdk')
 const pdfParse       = require('pdf-parse')
 
-let toFile = null
-try {
-  toFile = require('groq-sdk/uploads').toFile
-} catch {
-  toFile = null
-}
-
 const groq   = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'lumen-attachments'
 
@@ -43,9 +36,8 @@ async function uploadToStorage(buffer, originalName, mimeType, folder = 'uploads
 
 // ── Transcribe audio with Groq Whisper ─────────────────────────────────────
 async function transcribeAudio(buffer, originalName, mimeType) {
-  const file = toFile
-    ? await toFile(buffer, originalName, { type: mimeType })
-    : new File([buffer], originalName, { type: mimeType })
+  // Groq's transcription API needs a File-like object with a name & type
+  const file = new File([buffer], originalName, { type: mimeType })
 
   // FIX: removed `language: 'ar'` — forcing Arabic caused Whisper to mistranslate
   // non-Arabic speech and ignore mixed Arabic/English audio correctly.
@@ -56,7 +48,6 @@ async function transcribeAudio(buffer, originalName, mimeType) {
     file,
     model:           'whisper-large-v3',
     response_format: 'verbose_json',
-    prompt:          'This may contain Arabic, English, or mixed Arabic-English project requirements. Preserve names, numbers, prices, dates, platforms, and feature wording exactly.',
   })
 
   // verbose_json always returns an object with .text
@@ -72,7 +63,8 @@ async function extractDocumentText(buffer, mimeType) {
       const data = await pdfParse(buffer)
       const text = data.text?.trim()
       if (!text) return '[PDF contained no extractable text — may be a scanned image]'
-      return text.length > 16000 ? text.slice(0, 16000) + '\n...[truncated]' : text
+      // limit to ~4000 chars to stay within token budget
+      return text.length > 4000 ? text.slice(0, 4000) + '\n...[truncated]' : text
     } catch (e) {
       console.error('PDF parse error:', e.message)
       return '[PDF could not be parsed]'
@@ -111,7 +103,7 @@ async function processAttachments(files = {}, interpretImage) {
         transcription = await transcribeAudio(file.buffer, file.originalname, file.mimetype)
       } catch (err) {
         console.error(`Transcription failed for ${file.originalname}:`, err.message)
-        transcription = null
+        transcription = `[Transcription failed: ${err.message}]`
       }
     }
 
@@ -120,7 +112,7 @@ async function processAttachments(files = {}, interpretImage) {
         ai_interpretation = await interpretImage(file.buffer, file.mimetype)
       } catch (err) {
         console.error(`Image interpretation failed for ${file.originalname}:`, err.message)
-        ai_interpretation = null
+        ai_interpretation = `[Image analysis failed: ${err.message}]`
       }
     }
 
@@ -129,7 +121,7 @@ async function processAttachments(files = {}, interpretImage) {
         ai_interpretation = await extractDocumentText(file.buffer, file.mimetype)
       } catch (err) {
         console.error(`Document extraction failed for ${file.originalname}:`, err.message)
-        ai_interpretation = null
+        ai_interpretation = `[Document text extraction failed: ${err.message}]`
       }
     }
 
@@ -145,3 +137,4 @@ async function processAttachments(files = {}, interpretImage) {
 }
 
 module.exports = { processAttachments, uploadToStorage }
+
