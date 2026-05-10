@@ -389,13 +389,16 @@ function normalizeBriefOutput(synthesized, fallbackTitle = '') {
 
 // ─── Public: generateBrief ────────────────────────────────────────────────────
 
-async function generateBrief({ rawText = '', transcriptions = [], interpretations = [] }) {
+async function generateBrief({ rawText = '', transcriptions = [], interpretations = [], documentTexts = [] }) {
   const cleanedTranscriptions = await Promise.all(transcriptions.map(cleanVoiceTranscript))
 
   const parts = []
   if (rawText)                      parts.push(`CLIENT TEXT INPUT:\n${rawText}`)
   if (cleanedTranscriptions.length) parts.push(`VOICE NOTE TRANSCRIPTIONS:\n${cleanedTranscriptions.join('\n---\n')}`)
-  if (interpretations.length)       parts.push(`UPLOADED ATTACHMENTS (images/documents):\n${interpretations.join('\n---\n')}`)
+  // FIX: document text (PDF/Word) is primary client input — give it same weight as typed text
+  if (documentTexts.length)         parts.push(`CLIENT DOCUMENT CONTENT (extracted from uploaded PDF/Word files — treat this as primary client input, extract all requirements from it):\n${documentTexts.join('\n---\n')}`)
+  // Image interpretations are visual descriptions (secondary)
+  if (interpretations.length)       parts.push(`UPLOADED IMAGE DESCRIPTIONS:\n${interpretations.join('\n---\n')}`)
 
   const combinedInput = parts.join('\n\n===\n\n') || 'No input provided.'
 
