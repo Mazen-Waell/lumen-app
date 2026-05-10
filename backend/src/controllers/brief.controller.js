@@ -7,6 +7,29 @@ function shareUrl(token) {
   return `${process.env.FRONTEND_URL}/p/${token}`
 }
 
+function versionFromGenerated(generated, version_number) {
+  return {
+    version_number,
+    summary:              generated.summary,
+    goals:                generated.goals || [],
+    ambiguities:          generated.ambiguities || [],
+    follow_up_questions:  generated.follow_up_questions || [],
+    project_title:        generated.project_title || '',
+    estimated_complexity: generated.estimated_complexity || 'medium',
+    suggested_timeline:   generated.suggested_timeline || null,
+    explicit_facts:       generated.explicit_facts || [],
+    inferred_needs:       generated.inferred_needs || [],
+    mvp_scope:            generated.mvp_scope || [],
+    future_scope:         generated.future_scope || [],
+    optional_ideas:       generated.optional_ideas || [],
+    technical_details:    generated.technical_details || { integrations: [], payment_methods: [], platforms: [], constraints: [], admin_requirements: [] },
+    business_details:     generated.business_details || { budget: null, deadline: null, branches: null, user_roles: [] },
+    design_content_notes: generated.design_content_notes || [],
+    risks:                generated.risks || [],
+    recommendations:      generated.recommendations || [],
+  }
+}
+
 // ── Studio routes ─────────────────────────────────────────────────────────────
 
 async function create(req, res) {
@@ -40,9 +63,12 @@ async function create(req, res) {
       inferred_needs:       generated.inferred_needs       || [],
       mvp_scope:            generated.mvp_scope            || [],
       future_scope:         generated.future_scope         || [],
+      optional_ideas:       generated.optional_ideas       || [],
       technical_details:    generated.technical_details    || { integrations: [], payment_methods: [], platforms: [], constraints: [] },
       business_details:     generated.business_details     || { budget: null, deadline: null, branches: null, user_roles: [] },
+      design_content_notes: generated.design_content_notes || [],
       risks:                generated.risks                || [],
+      recommendations:      generated.recommendations      || [],
     }],
   })
 
@@ -99,9 +125,12 @@ async function regenerate(req, res) {
     inferred_needs:       generated.inferred_needs       || currentVersion.inferred_needs    || [],
     mvp_scope:            generated.mvp_scope            || currentVersion.mvp_scope         || [],
     future_scope:         generated.future_scope         || currentVersion.future_scope      || [],
+    optional_ideas:       generated.optional_ideas       || currentVersion.optional_ideas    || [],
     technical_details:    generated.technical_details    || currentVersion.technical_details || { integrations: [], payment_methods: [], platforms: [], constraints: [] },
     business_details:     generated.business_details     || currentVersion.business_details  || { budget: null, deadline: null, branches: null, user_roles: [] },
+    design_content_notes: generated.design_content_notes || currentVersion.design_content_notes || [],
     risks:                generated.risks                || currentVersion.risks             || [],
+    recommendations:      generated.recommendations      || currentVersion.recommendations  || [],
   })
   brief.current_version = nextVersionN
   brief.status          = 'DRAFT'
