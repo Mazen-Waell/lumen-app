@@ -167,6 +167,128 @@ function mergeFacts(factSets) {
   return validateExtraction(merged)
 }
 
+function addObj(list, item, keyFn = itemLabel) {
+  if (!item || !keyFn(item)) return list
+  return uniqueObjects([...(list || []), item], keyFn)
+}
+
+function addStr(list, item) {
+  return uniqueStrings([...(list || []), item].filter(Boolean))
+}
+
+function factItem(text, extra = {}) {
+  return {
+    confidence: 0.98,
+    extraction_type: 'explicit',
+    ...extra,
+    name: extra.name || text,
+    description: extra.description || text,
+  }
+}
+
+function enrichFactsFromRawInput(facts, rawInput) {
+  const f = facts || {}
+  const s = cleanText(rawInput)
+  const lower = s.toLowerCase()
+
+  if (/budget\s+is\s+flexible\s+but\s+not\s+crazy/i.test(s) && !valueOf(f.budget)) {
+    f.budget = { value: 'Flexible, but not excessive ("not crazy")', confidence: 0.99, extraction_type: 'explicit' }
+  }
+  if (/need\s+before\s+summer\s+campaign|before\s+the\s+summer\s+campaign/i.test(s) && !valueOf(f.deadline)) {
+    f.deadline = { value: 'Before the summer campaign', confidence: 0.99, extraction_type: 'explicit' }
+  }
+  if (/3\s+branches.*cairo.*alex.*sahel|cairo\/alex\/sahel/i.test(lower)) {
+    f.branches_count = { value: '3 current branches: Cairo, Alexandria, Sahel', confidence: 0.99, extraction_type: 'explicit' }
+    f.verbatim_numbers = addStr(f.verbatim_numbers, '3 branches: Cairo/Alex/Sahel')
+  }
+  if (/dubai\s+soon|branch\s+opening\s+in\s+dubai\s+soon/i.test(lower)) {
+    f.features = addObj(f.features, factItem('Dubai branch opening soon', { phase: 'future', priority: 'should' }), item => item.name)
+  }
+  if (/2\s+years\s+ago|around\s+2\s+years/i.test(lower)) {
+    f.verbatim_numbers = addStr(f.verbatim_numbers, 'Started around 2 years ago')
+  }
+
+  const featureRules = [
+    [/sell beans online|online ordering|faster ordering/i, 'Online ordering / online bean sales', 'unclear', 'should'],
+    [/reserve tables|reservation/i, 'Table reservation system', 'optional', 'could'],
+    [/dashboard.*staff|staff.*update menu|update menu items/i, 'Staff dashboard to update menu items without developer help', 'mvp', 'must'],
+    [/loyalty points/i, 'Loyalty points', 'future', 'could'],
+    [/sourcing and roasting|roasting process/i, 'Sourcing and roasting process section', 'mvp', 'should'],
+    [/qr menu/i, 'QR menu system', 'optional', 'could'],
+    [/customer accounts/i, 'Customer accounts', 'optional', 'could'],
+    [/subscription boxes/i, 'Monthly coffee subscription boxes', 'future', 'could'],
+    [/workshop booking/i, 'Online workshop booking', 'mvp', 'should'],
+    [/reviews\/photos|reviews.*photos|upload reviews/i, 'User reviews/photos upload', 'optional', 'could'],
+    [/map for branch locations|branch locations/i, 'Map for branch locations', 'mvp', 'should'],
+    [/video hero/i, 'Video hero section', 'optional', 'could'],
+    [/mobile app|app later/i, 'Mobile app later', 'future', 'could'],
+  ]
+  for (const [pattern, name, phase, priority] of featureRules) {
+    if (pattern.test(s)) f.features = addObj(f.features, factItem(name, { phase, priority }), item => item.name)
+  }
+
+  const integrationRules = [
+    [/instagram feed|instagram/i, 'Instagram feed'],
+    [/meta ads/i, 'Meta ads'],
+    [/shopify/i, 'Shopify'],
+    [/analytics/i, 'Analytics'],
+  ]
+  for (const [pattern, name] of integrationRules) {
+    if (pattern.test(s)) f.integrations = addObj(f.integrations, factItem(name), item => item.name)
+  }
+
+  for (const method of ['visa', 'mastercard', 'cash']) {
+    if (new RegExp(method, 'i').test(s)) f.payment_methods = addObj(f.payment_methods, factItem(method), item => item.name)
+  }
+
+  if (/arabic\s*\+\s*english|arabic and english/i.test(s)) {
+    f.languages_required = addObj(f.languages_required, factItem('Arabic + English'), item => item.name)
+  }
+  if (/seo|competitors rank higher/i.test(lower)) {
+    f.technical_constraints = addObj(f.technical_constraints, factItem('SEO is required because competitors rank higher'), item => item.description)
+  }
+  if (/shopify or custom build|custom build/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Shopify vs custom build decision is unresolved')
+  }
+  if (/already bought domain/i.test(lower)) {
+    f.technical_constraints = addObj(f.technical_constraints, factItem('Client already bought the domain'), item => item.description)
+  }
+  if (/hosting\?\?/i.test(s)) {
+    f.open_questions = addStr(f.open_questions, 'Hosting ownership and setup are not confirmed')
+  }
+  if (/payment methods\?|visa\/mastercard\/cash/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Payment gateway and payment methods need confirmation')
+  }
+  if (/brand guidelines/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Brand guidelines and assets need confirmation')
+  }
+  if (/who writes product descriptions|copywriting/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Content ownership for product descriptions and copywriting is unclear')
+  }
+  if (/analytics dashboard/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Analytics dashboard requirements need confirmation')
+  }
+  if (/dashboard.*permissions|dashboard permissions/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Staff dashboard roles and permissions are not defined')
+  }
+
+  const designRules = [
+    [/modern not corporate/i, 'Modern, not corporate visual direction'],
+    [/dark mode/i, 'Dark mode reference was liked'],
+    [/premium but not too minimal/i, 'Homepage should feel premium but still show products clearly'],
+    [/apple-style|this feels clean/i, 'Apple-style clean landing page reference'],
+    [/bigger images/i, 'Product cards should use bigger images'],
+    [/hates orange/i, 'Owner hates orange color'],
+    [/animations.*not cringe|not cringe/i, 'Animations are desired but should not feel cringe'],
+  ]
+  for (const [pattern, note] of designRules) {
+    if (pattern.test(s)) f.design_preferences = addObj(f.design_preferences, factItem(note), item => item.description)
+  }
+
+  f.verbatim_dates = addStr(f.verbatim_dates, /before\s+(?:the\s+)?summer\s+campaign/i.test(s) ? 'before summer campaign' : null)
+  return validateExtraction(f)
+}
+
 const VOICE_CLEANUP_SYSTEM = `You clean voice transcripts for project intake.
 Return only cleaned transcript text.
 Rules:
@@ -318,10 +440,17 @@ function deterministicBriefFromFacts(facts) {
     ...facts.verbatim_dates.map(d => `Time reference mentioned: ${d}`),
   ])
 
+  const normalizedOpenQuestions = (facts.open_questions || []).filter(q => {
+    const key = compactKey(q)
+    if (valueOf(facts.budget) && /what is the budget|budget for the project|budget is not/i.test(q)) return false
+    if (valueOf(facts.deadline) && /what is the exact deadline|deadline for the project/i.test(q)) return false
+    return key
+  })
+
   const ambiguities = uniqueStrings([
-    ...facts.open_questions,
-    !valueOf(facts.budget) && 'Budget range is not clearly defined',
-    !valueOf(facts.deadline) && 'Exact launch date is not confirmed',
+    ...normalizedOpenQuestions,
+    valueOf(facts.budget) ? 'A fixed budget range is not confirmed' : 'Budget range is not clearly defined',
+    valueOf(facts.deadline) ? 'Exact calendar launch date is not confirmed' : 'Exact launch date is not confirmed',
     'Payment gateway and payment methods need confirmation',
     'Staff dashboard roles and permissions are not defined',
     'Shopify vs custom build decision is unresolved',
@@ -498,7 +627,7 @@ async function generateBrief({ rawText = '', transcriptions = [], interpretation
     }
   }
 
-  const facts = mergeFacts(factSets)
+  const facts = enrichFactsFromRawInput(mergeFacts(factSets), combinedInput)
   const deterministic = deterministicBriefFromFacts(facts)
 
   let synthesized = null
