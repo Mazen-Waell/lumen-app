@@ -67,9 +67,79 @@ STRICT RULES:
 - Return only the cleaned transcript text — no labels, no explanations`
 
 async function cleanVoiceTranscript(t) {
+  if (typeof t === 'object' && t) t = t.text || t.transcription || ''
   if (!t || t.length < 40) return t
   try   { return await groqCall(MODEL_FAST, VOICE_CLEANUP_SYSTEM, t, 1500) }
   catch { return t }
+}
+
+function itemText(item) {
+  if (!item) return ''
+  if (typeof item === 'string') return item
+  return item.text || item.transcription || item.ai_interpretation || ''
+}
+
+function itemName(item, fallback) {
+  if (!item || typeof item === 'string') return fallback
+  return item.name || item.original_filename || fallback
+}
+
+function chunkText(text, maxChars = 9000, overlap = 700) {
+  if (text.length <= maxChars) return [text]
+  const chunks = []
+  let start = 0
+  while (start < text.length) {
+    let end = Math.min(start + maxChars, text.length)
+    const boundary = text.lastIndexOf('\n', end)
+    if (boundary > start + maxChars * 0.65) end = boundary
+    chunks.push(text.slice(start, end).trim())
+    if (end >= text.length) break
+    start = Math.max(0, end - overlap)
+  }
+  return chunks
+}
+
+function appendArray(target, source, key) {
+  if (!Array.isArray(source?.[key])) return
+  target[key] = [...(target[key] || []), ...source[key]]
+}
+
+function mergeField(a, b, key) {
+  const av = getValue(a?.[key])
+  const bv = getValue(b?.[key])
+  if (!av) return b?.[key] || a?.[key] || null
+  if (!bv) return a?.[key]
+  return getConfidence(b?.[key]) > getConfidence(a?.[key]) ? b[key] : a[key]
+}
+
+function mergeFacts(factSets) {
+  const merged = {}
+  for (const facts of factSets.filter(Boolean)) {
+    merged.project_type   = mergeField(merged, facts, 'project_type')
+    merged.project_name   = mergeField(merged, facts, 'project_name')
+    merged.core_problem   = mergeField(merged, facts, 'core_problem')
+    merged.target_users   = mergeField(merged, facts, 'target_users')
+    merged.budget         = mergeField(merged, facts, 'budget')
+    merged.deadline       = mergeField(merged, facts, 'deadline')
+    merged.branches_count = mergeField(merged, facts, 'branches_count')
+    ;[
+      'features',
+      'integrations',
+      'payment_methods',
+      'user_roles',
+      'admin_requirements',
+      'technical_constraints',
+      'platforms',
+      'languages_required',
+      'explicitly_excluded',
+      'verbatim_numbers',
+      'verbatim_dates',
+      'input_sources',
+    ].forEach(key => appendArray(merged, facts, key))
+    merged.language = merged.language === 'Mixed' || facts.language === 'Mixed' ? 'Mixed' : (merged.language || facts.language)
+    merged.input_quality = merged.input_quality === 'messy' || facts.input_quality === 'messy' ? 'messy' : (merged.input_quality || facts.input_quality)
+  }
+  return merged
 }
 
 // ─── Step 1: Strict Fact Extraction ──────────────────────────────────────────
@@ -207,6 +277,18 @@ function filterByConfidence(items = [], threshold = CONFIDENCE_THRESHOLD) {
   return items.filter(item => (item.confidence ?? 1) >= threshold)
 }
 
+function deduplicateObjects(items = [], keyFn) {
+  const seen = new Set()
+  const out = []
+  for (const item of items) {
+    const key = String(keyFn(item) || '').toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, ' ').trim()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(item)
+  }
+  return out
+}
+
 // FIX: hallucination patterns extended with Arabic metric phrases
 const HALLUCINATION_PATTERNS = [
   /\d+%/,
@@ -245,6 +327,18 @@ function validateExtraction(facts) {
   if (Array.isArray(facts.payment_methods))    facts.payment_methods    = filterByConfidence(facts.payment_methods)
   if (Array.isArray(facts.platforms))          facts.platforms          = filterByConfidence(facts.platforms)
   if (Array.isArray(facts.languages_required)) facts.languages_required = filterByConfidence(facts.languages_required)
+
+  if (Array.isArray(facts.features))              facts.features              = deduplicateObjects(facts.features, x => `${x.name || ''} ${x.description || ''}`)
+  if (Array.isArray(facts.integrations))          facts.integrations          = deduplicateObjects(facts.integrations, x => x.name)
+  if (Array.isArray(facts.payment_methods))       facts.payment_methods       = deduplicateObjects(facts.payment_methods, x => x.name)
+  if (Array.isArray(facts.user_roles))            facts.user_roles            = deduplicateObjects(facts.user_roles, x => x.name)
+  if (Array.isArray(facts.admin_requirements))    facts.admin_requirements    = deduplicateObjects(facts.admin_requirements, x => x.description)
+  if (Array.isArray(facts.technical_constraints)) facts.technical_constraints = deduplicateObjects(facts.technical_constraints, x => x.description)
+  if (Array.isArray(facts.platforms))             facts.platforms             = deduplicateObjects(facts.platforms, x => x.name)
+  if (Array.isArray(facts.languages_required))    facts.languages_required    = deduplicateObjects(facts.languages_required, x => x.name)
+  if (Array.isArray(facts.explicitly_excluded))   facts.explicitly_excluded   = deduplicateStrings(facts.explicitly_excluded)
+  if (Array.isArray(facts.verbatim_numbers))      facts.verbatim_numbers      = deduplicateStrings(facts.verbatim_numbers)
+  if (Array.isArray(facts.verbatim_dates))        facts.verbatim_dates        = deduplicateStrings(facts.verbatim_dates)
 
   // Drop assumed budget/deadline — too risky to present as fact
   if (getType(facts.budget)   === 'assumed') facts.budget   = null
@@ -308,6 +402,7 @@ Return ONLY this JSON — no explanation, no markdown:
   ],
   "mvp_scope": ["Feature confirmed or strongly implied for first launch"],
   "future_scope": ["Feature client mentioned as optional or later phase"],
+  "optional_ideas": ["Ideas phrased as maybe / optional / not urgent / unclear"],
   "technical_details": {
     "integrations": ["every integration mentioned"],
     "payment_methods": ["every payment method mentioned"],
@@ -320,6 +415,7 @@ Return ONLY this JSON — no explanation, no markdown:
     "branches": "value or null",
     "user_roles": ["roles mentioned"]
   },
+  "design_content_notes": ["visual, branding, content, copywriting, color, reference, or media notes"],
   "ambiguities": [
     "Single clear statement of one unresolved issue"
   ],
@@ -328,7 +424,8 @@ Return ONLY this JSON — no explanation, no markdown:
   ],
   "estimated_complexity": "low / medium / high",
   "suggested_timeline": "range only if inferable from scope, else null",
-  "risks": ["Risk based on actual scope gaps"]
+  "risks": ["Risk based on actual scope gaps"],
+  "recommendations": ["Non-factual agency recommendations, clearly separate from facts"]
 }`
 
 async function synthesizeBrief(facts) {
@@ -356,11 +453,14 @@ function normalizeBriefOutput(synthesized, fallbackTitle = '') {
       suggested_timeline:   null,
       mvp_scope:            [],
       future_scope:         [],
+      optional_ideas:       [],
       explicit_facts:       [],
       inferred_needs:       [],
       technical_details:    { integrations: [], payment_methods: [], platforms: [], constraints: [] },
       business_details:     { budget: null, deadline: null, branches: null, user_roles: [] },
+      design_content_notes: [],
       risks:                [],
+      recommendations:      [],
     }
   }
 
@@ -379,22 +479,36 @@ function normalizeBriefOutput(synthesized, fallbackTitle = '') {
     suggested_timeline:   synthesized.suggested_timeline || null,
     mvp_scope:            (synthesized.mvp_scope         || []).slice(0, 12),
     future_scope:         (synthesized.future_scope      || []).slice(0, 10),
+    optional_ideas:       (synthesized.optional_ideas    || []).slice(0, 10),
     explicit_facts:       (synthesized.explicit_facts    || []).slice(0, 10),
     inferred_needs:       (synthesized.inferred_needs    || []).slice(0, 6),
     technical_details:    synthesized.technical_details  || { integrations: [], payment_methods: [], platforms: [], constraints: [] },
     business_details:     synthesized.business_details  || { budget: null, deadline: null, branches: null, user_roles: [] },
+    design_content_notes: (synthesized.design_content_notes || []).slice(0, 10),
     risks:                (synthesized.risks             || []).slice(0, 5),
+    recommendations:      (synthesized.recommendations   || []).slice(0, 5),
   }
 }
 
 // ─── Public: generateBrief ────────────────────────────────────────────────────
 
 async function generateBrief({ rawText = '', transcriptions = [], interpretations = [], documentTexts = [] }) {
-  const cleanedTranscriptions = await Promise.all(transcriptions.map(cleanVoiceTranscript))
+  const cleanedTranscriptions = await Promise.all(transcriptions.map(async (item, idx) => ({
+    name: itemName(item, `voice note ${idx + 1}`),
+    text: await cleanVoiceTranscript(itemText(item)),
+  })))
+  const normalizedDocuments = documentTexts.map((item, idx) => ({
+    name: itemName(item, `document ${idx + 1}`),
+    text: itemText(item),
+  }))
+  const normalizedInterpretations = interpretations.map((item, idx) => ({
+    name: itemName(item, `image ${idx + 1}`),
+    text: itemText(item),
+  }))
 
   const parts = []
   if (rawText)                      parts.push(`CLIENT TEXT INPUT:\n${rawText}`)
-  if (cleanedTranscriptions.length) parts.push(`VOICE NOTE TRANSCRIPTIONS:\n${cleanedTranscriptions.join('\n---\n')}`)
+  if (cleanedTranscriptions.length) parts.push(`VOICE NOTE TRANSCRIPTIONS:\n${cleanedTranscriptions.map(t => `${t.name}:\n${t.text}`).join('\n---\n')}`)
   // FIX: document text (PDF/Word) is primary client input — give it same weight as typed text
   if (documentTexts.length)         parts.push(`CLIENT DOCUMENT CONTENT (extracted from uploaded PDF/Word files — treat this as primary client input, extract all requirements from it):\n${documentTexts.join('\n---\n')}`)
   // Image interpretations are visual descriptions (secondary)
@@ -403,8 +517,15 @@ async function generateBrief({ rawText = '', transcriptions = [], interpretation
   const combinedInput = parts.join('\n\n===\n\n') || 'No input provided.'
 
   let facts = null
-  try        { facts = await extractFacts(combinedInput) }
-  catch (err){ console.error('Extraction failed:', err.message) }
+  try {
+    const chunks = chunkText(combinedInput)
+    const factSets = []
+    for (const [idx, chunk] of chunks.entries()) {
+      const chunkFacts = await extractFacts(`CHUNK ${idx + 1} OF ${chunks.length}\n\n${chunk}`)
+      if (chunkFacts) factSets.push(chunkFacts)
+    }
+    facts = mergeFacts(factSets)
+  } catch (err){ console.error('Extraction failed:', err.message) }
 
   facts = validateExtraction(facts)
 

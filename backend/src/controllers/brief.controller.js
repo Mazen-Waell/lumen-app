@@ -7,6 +7,30 @@ function shareUrl(token) {
   return `${process.env.FRONTEND_URL}/p/${token}`
 }
 
+function versionFromGenerated(generated, version_number) {
+  return {
+    version_number,
+    summary:              generated.summary,
+    goals:                generated.goals || [],
+    ambiguities:          generated.ambiguities || [],
+    follow_up_questions:  generated.follow_up_questions || [],
+    project_title:        generated.project_title || '',
+    estimated_complexity: generated.estimated_complexity || 'medium',
+    suggested_timeline:   generated.suggested_timeline || null,
+    explicit_facts:       generated.explicit_facts || [],
+    inferred_needs:       generated.inferred_needs || [],
+    mvp_scope:            generated.mvp_scope || [],
+    future_scope:         generated.future_scope || [],
+    optional_ideas:       generated.optional_ideas || [],
+    technical_details:    generated.technical_details || {},
+    business_details:     generated.business_details || {},
+    design_content_notes: generated.design_content_notes || [],
+    risks:                generated.risks || [],
+    recommendations:      generated.recommendations || [],
+    extraction_metadata:  generated.extraction_metadata || {},
+  }
+}
+
 // ── Studio routes ─────────────────────────────────────────────────────────────
 
 async function create(req, res) {
@@ -26,16 +50,7 @@ async function create(req, res) {
     client_name,
     raw_text_input: raw_text_input || null,
     attachments:    attachmentData,
-    versions: [{
-      version_number:       1,
-      summary:              generated.summary,
-      goals:                generated.goals,
-      ambiguities:          generated.ambiguities,
-      follow_up_questions:  generated.follow_up_questions,
-      project_title:        generated.project_title        || '',
-      estimated_complexity: generated.estimated_complexity || 'medium',
-      suggested_timeline:   generated.suggested_timeline   || 'TBD',
-    }],
+    versions: [versionFromGenerated(generated, 1)],
   })
 
   res.status(201).json({ ...brief.toObject(), share_url: shareUrl(brief.share_token) })
@@ -77,16 +92,13 @@ async function regenerate(req, res) {
   const generated    = await regenerateBrief(currentVersion, feedback)
   const nextVersionN = currentVersion.version_number + 1
 
-  brief.versions.push({
-    version_number:       nextVersionN,
-    summary:              generated.summary,
-    goals:                generated.goals,
-    ambiguities:          generated.ambiguities,
-    follow_up_questions:  generated.follow_up_questions,
-    project_title:        generated.project_title        || currentVersion.project_title || '',
+  brief.versions.push(versionFromGenerated({
+    ...currentVersion,
+    ...generated,
+    project_title:        generated.project_title || currentVersion.project_title || '',
     estimated_complexity: generated.estimated_complexity || currentVersion.estimated_complexity || 'medium',
-    suggested_timeline:   generated.suggested_timeline   || currentVersion.suggested_timeline   || 'TBD',
-  })
+    suggested_timeline:   generated.suggested_timeline || currentVersion.suggested_timeline || null,
+  }, nextVersionN))
   brief.current_version = nextVersionN
   brief.status          = 'DRAFT'
   await brief.save()
