@@ -38,6 +38,13 @@ async function create(req, res) {
 
   const attachmentData  = await processAttachments(req.files || {}, interpretImage)
   const transcriptions  = attachmentData.filter(a => a.type === 'AUDIO' && a.transcription).map(a => a.transcription)
+  const audioUploads    = attachmentData.filter(a => a.type === 'AUDIO')
+  if (!raw_text_input?.trim() && audioUploads.length && transcriptions.length === 0) {
+    return res.status(422).json({
+      error: 'Audio transcription failed, so no usable text could be extracted.',
+      details: audioUploads.map(a => `${a.original_filename}: ${a.processing_error || 'No transcript returned'}`),
+    })
+  }
   // FIX: PDF/Word text is primary client input — separated from image descriptions
   const documentTexts   = attachmentData.filter(a => a.type === 'DOCUMENT' && a.ai_interpretation).map(a => a.ai_interpretation)
   const interpretations = attachmentData.filter(a => a.type === 'IMAGE' && a.ai_interpretation).map(a => a.ai_interpretation)

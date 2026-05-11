@@ -2,6 +2,7 @@ const { v4: uuidv4 } = require('uuid')
 const { supabase }   = require('../lib/db')
 const Groq           = require('groq-sdk')
 const pdfParse       = require('pdf-parse')
+const { File: NodeFile } = require('buffer')
 
 let toFile = null
 try {
@@ -13,7 +14,7 @@ try {
 const groq   = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'lumen-attachments'
 
-const AUDIO_TYPES    = ['audio/mpeg','audio/mp4','audio/wav','audio/webm','audio/ogg','audio/x-m4a']
+const AUDIO_TYPES    = ['audio/mpeg','audio/mp3','audio/mp4','audio/x-m4a','audio/m4a','audio/wav','audio/x-wav','audio/wave','audio/webm','audio/ogg']
 const IMAGE_TYPES    = ['image/jpeg','image/png','image/webp']
 const DOCUMENT_TYPES = [
   'application/pdf',
@@ -45,7 +46,7 @@ async function uploadToStorage(buffer, originalName, mimeType, folder = 'uploads
 async function transcribeAudio(buffer, originalName, mimeType) {
   const file = toFile
     ? await toFile(buffer, originalName, { type: mimeType })
-    : new File([buffer], originalName, { type: mimeType })
+    : new NodeFile([buffer], originalName, { type: mimeType })
 
   // FIX: removed `language: 'ar'` — forcing Arabic caused Whisper to mistranslate
   // non-Arabic speech and ignore mixed Arabic/English audio correctly.
@@ -60,9 +61,14 @@ async function transcribeAudio(buffer, originalName, mimeType) {
   })
 
   // verbose_json always returns an object with .text
-  if (result && typeof result === 'object' && result.text) return result.text.trim()
-  if (typeof result === 'string') return result.trim()
-  return ''
+  const text = result && typeof result === 'object' && result.text
+    ? result.text.trim()
+    : typeof result === 'string'
+      ? result.trim()
+      : ''
+
+  if (!text) throw new Error('Groq transcription returned empty text')
+  return text
 }
 
 // ── Extract text from PDF ──────────────────────────────────────────────────
@@ -96,6 +102,7 @@ async function processAttachments(files = {}, interpretImage) {
     let file_url        = null
     let transcription   = null
     let ai_interpretation = null
+    let processing_error = null
 
     // Upload to storage
     try {
@@ -111,6 +118,7 @@ async function processAttachments(files = {}, interpretImage) {
         transcription = await transcribeAudio(file.buffer, file.originalname, file.mimetype)
       } catch (err) {
         console.error(`Transcription failed for ${file.originalname}:`, err.message)
+        processing_error = `Transcription failed: ${err.message}`
         transcription = null
       }
     }
@@ -120,6 +128,7 @@ async function processAttachments(files = {}, interpretImage) {
         ai_interpretation = await interpretImage(file.buffer, file.mimetype)
       } catch (err) {
         console.error(`Image interpretation failed for ${file.originalname}:`, err.message)
+        processing_error = `Image analysis failed: ${err.message}`
         ai_interpretation = null
       }
     }
@@ -129,6 +138,7 @@ async function processAttachments(files = {}, interpretImage) {
         ai_interpretation = await extractDocumentText(file.buffer, file.mimetype)
       } catch (err) {
         console.error(`Document extraction failed for ${file.originalname}:`, err.message)
+        processing_error = `Document text extraction failed: ${err.message}`
         ai_interpretation = null
       }
     }
@@ -139,6 +149,7 @@ async function processAttachments(files = {}, interpretImage) {
       file_url,
       transcription,
       ai_interpretation,
+      processing_error,
     })
   }
   return results

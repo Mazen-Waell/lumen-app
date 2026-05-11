@@ -1,7 +1,8 @@
 const multer = require('multer')
 
 const ALLOWED = [
-  'audio/mpeg','audio/mp4','audio/wav','audio/webm','audio/ogg','audio/x-m4a',
+  'audio/mpeg','audio/mp3','audio/mp4','audio/x-m4a','audio/m4a',
+  'audio/wav','audio/x-wav','audio/wave','audio/webm','audio/ogg',
   'image/jpeg','image/png','image/webp',
   'application/pdf',
   'application/msword',
