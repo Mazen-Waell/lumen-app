@@ -79,6 +79,84 @@ function uniqueStrings(items = []) {
   return out
 }
 
+function topicKey(text = '') {
+  const s = compactKey(text)
+  const topics = [
+    ['shopify_custom', ['shopify', 'custom build', 'e commerce platform', 'ecommerce platform']],
+    ['hosting', ['hosting']],
+    ['payments', ['payment', 'gateway', 'visa', 'mastercard', 'cash']],
+    ['brand_assets', ['brand guidelines', 'brand assets', 'logo', 'visual system']],
+    ['content_owner', ['content ownership', 'copywriting', 'product descriptions', 'photos', 'images']],
+    ['analytics', ['analytics', 'tracking']],
+    ['staff_dashboard', ['staff dashboard', 'dashboard roles', 'permissions', 'admin']],
+    ['ecommerce_phase', ['e commerce', 'ecommerce', 'online bean', 'online ordering', 'phase 1']],
+    ['dubai_branch', ['dubai']],
+    ['mobile_app', ['mobile app', 'app later']],
+    ['loyalty', ['loyalty']],
+    ['subscription', ['subscription']],
+    ['seo', ['seo', 'search engine']],
+    ['traffic', ['traffic', 'expected users', 'scale']],
+    ['deadline', ['deadline', 'launch date']],
+    ['budget', ['budget']],
+  ]
+  const match = topics.find(([, words]) => words.some(w => s.includes(w)))
+  return match ? match[0] : s.split(' ').slice(0, 6).join(' ')
+}
+
+function uniqueByTopic(items = []) {
+  const seen = new Set()
+  const out = []
+  for (const item of items.filter(Boolean)) {
+    const text = cleanText(item)
+    const key = topicKey(text)
+    if (!text || seen.has(key)) continue
+    seen.add(key)
+    out.push(text)
+  }
+  return out
+}
+
+function isUnconfirmedEcommerce(text = '') {
+  return /e-?commerce|online ordering|sell coffee beans|sell beans|online bean/i.test(text)
+}
+
+function removeOptionalFactsFromGoals(goals = [], optionalIdeas = [], futureScope = []) {
+  const optionalText = `${optionalIdeas.join(' ')} ${futureScope.join(' ')}`
+  const ecommerceOptional = isUnconfirmedEcommerce(optionalText)
+  return goals.filter(goal => !(ecommerceOptional && isUnconfirmedEcommerce(goal)))
+}
+
+function cleanSummary(summary = '', deterministic) {
+  let out = summary
+  const optionalText = `${deterministic.optional_ideas.join(' ')} ${deterministic.future_scope.join(' ')}`
+  if (isUnconfirmedEcommerce(optionalText)) {
+    out = out
+      .replace(/,\s*e-?commerce functionality/ig, '')
+      .replace(/\s*with e-?commerce functionality,?/ig, '')
+      .replace(/,\s*and e-?commerce functionality/ig, '')
+  }
+  return cleanText(out)
+}
+
+function ensureOperationalFactsInSummary(summary = '', deterministic) {
+  const parts = [cleanSummary(summary, deterministic)]
+  const branches = deterministic.business_details?.branches
+  const budget = deterministic.business_details?.budget
+  const deadline = deterministic.business_details?.deadline
+
+  if (branches && !new RegExp(branches.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(parts[0])) {
+    parts.push(`Current branches/locations: ${branches}.`)
+  }
+  if (budget && !/budget|ميزانية/i.test(parts[0])) {
+    parts.push(`Budget guidance: ${budget}.`)
+  }
+  if (deadline && !/deadline|launch|summer|campaign|ميعاد|تسليم/i.test(parts[0])) {
+    parts.push(`Stated deadline: ${deadline}.`)
+  }
+
+  return cleanText(parts.filter(Boolean).join(' '))
+}
+
 function uniqueObjects(items = [], keyFn) {
   const seen = new Set()
   const out = []
@@ -197,7 +275,7 @@ function enrichFactsFromRawInput(facts, rawInput) {
   if (/need\s+before\s+summer\s+campaign|before\s+the\s+summer\s+campaign/i.test(s) && !valueOf(f.deadline)) {
     f.deadline = { value: 'Before the summer campaign', confidence: 0.99, extraction_type: 'explicit' }
   }
-  if (/3\s+branches.*cairo.*alex.*sahel|cairo\/alex\/sahel/i.test(lower)) {
+  if (/3\s+branches[\s\S]{0,120}(cairo|القاهرة)[\s\S]{0,80}(alex|alexandria|اسكندرية|الإسكندرية)[\s\S]{0,80}(sahel|الساحل)|cairo\s*\/\s*alex\s*\/\s*sahel/i.test(lower)) {
     f.branches_count = { value: '3 current branches: Cairo, Alexandria, Sahel', confidence: 0.99, extraction_type: 'explicit' }
     f.verbatim_numbers = addStr(f.verbatim_numbers, '3 branches: Cairo/Alex/Sahel')
   }
@@ -209,7 +287,7 @@ function enrichFactsFromRawInput(facts, rawInput) {
   }
 
   const featureRules = [
-    [/sell beans online|online ordering|faster ordering/i, 'Online ordering / online bean sales', 'unclear', 'should'],
+    [/sell beans online|online ordering|faster ordering/i, 'Online ordering / online bean sales', 'optional', 'could'],
     [/reserve tables|reservation/i, 'Table reservation system', 'optional', 'could'],
     [/dashboard.*staff|staff.*update menu|update menu items/i, 'Staff dashboard to update menu items without developer help', 'mvp', 'must'],
     [/loyalty points/i, 'Loyalty points', 'future', 'could'],
@@ -571,15 +649,29 @@ function sanitizeGoals(goals = []) {
 
 function mergeBriefs(aiBrief, deterministic) {
   const b = aiBrief || {}
+  const optionalIdeas = uniqueStrings([...(b.optional_ideas || []), ...deterministic.optional_ideas]).slice(0, 12)
+  const futureScope = uniqueStrings([...(b.future_scope || []), ...deterministic.future_scope]).slice(0, 12)
+  const goals = removeOptionalFactsFromGoals(
+    sanitizeGoals([...(b.goals || []), ...deterministic.goals]),
+    optionalIdeas,
+    futureScope
+  ).slice(0, 8)
+  const ambiguities = uniqueByTopic([...(b.ambiguities || []), ...deterministic.ambiguities]).slice(0, 10)
+  const followUpQuestions = uniqueByTopic([...(b.follow_up_questions || []), ...deterministic.follow_up_questions]).slice(0, 10)
+
   return {
     project_title: b.project_title || deterministic.project_title,
-    summary: b.summary || deterministic.summary,
-    goals: sanitizeGoals([...(b.goals || []), ...deterministic.goals]).slice(0, 8),
+    summary: ensureOperationalFactsInSummary(b.summary || deterministic.summary, {
+      ...deterministic,
+      optional_ideas: optionalIdeas,
+      future_scope: futureScope,
+    }),
+    goals,
     explicit_facts: uniqueStrings([...(b.explicit_facts || []), ...deterministic.explicit_facts]).slice(0, 14),
     inferred_needs: uniqueStrings([...(b.inferred_needs || []), ...deterministic.inferred_needs]).slice(0, 8),
     mvp_scope: uniqueStrings([...(b.mvp_scope || []), ...deterministic.mvp_scope]).slice(0, 14),
-    future_scope: uniqueStrings([...(b.future_scope || []), ...deterministic.future_scope]).slice(0, 12),
-    optional_ideas: uniqueStrings([...(b.optional_ideas || []), ...deterministic.optional_ideas]).slice(0, 12),
+    future_scope: futureScope,
+    optional_ideas: optionalIdeas,
     technical_details: {
       integrations: uniqueStrings([...(b.technical_details?.integrations || []), ...deterministic.technical_details.integrations]),
       payment_methods: uniqueStrings([...(b.technical_details?.payment_methods || []), ...deterministic.technical_details.payment_methods]),
@@ -588,14 +680,14 @@ function mergeBriefs(aiBrief, deterministic) {
       admin_requirements: uniqueStrings([...(b.technical_details?.admin_requirements || []), ...deterministic.technical_details.admin_requirements]),
     },
     business_details: {
-      budget: b.business_details?.budget || deterministic.business_details.budget,
-      deadline: b.business_details?.deadline || deterministic.business_details.deadline,
-      branches: b.business_details?.branches || deterministic.business_details.branches,
+      budget: deterministic.business_details.budget || b.business_details?.budget || null,
+      deadline: deterministic.business_details.deadline || b.business_details?.deadline || null,
+      branches: deterministic.business_details.branches || b.business_details?.branches || null,
       user_roles: uniqueStrings([...(b.business_details?.user_roles || []), ...deterministic.business_details.user_roles]),
     },
     design_content_notes: uniqueStrings([...(b.design_content_notes || []), ...deterministic.design_content_notes]).slice(0, 12),
-    ambiguities: uniqueStrings([...(b.ambiguities || []), ...deterministic.ambiguities]).slice(0, 10),
-    follow_up_questions: uniqueStrings([...(b.follow_up_questions || []), ...deterministic.follow_up_questions]).slice(0, 10),
+    ambiguities,
+    follow_up_questions: followUpQuestions,
     estimated_complexity: ['low', 'medium', 'high'].includes(b.estimated_complexity) ? b.estimated_complexity : deterministic.estimated_complexity,
     suggested_timeline: b.suggested_timeline || null,
     risks: uniqueStrings([...(b.risks || []), ...deterministic.risks]).slice(0, 8),
