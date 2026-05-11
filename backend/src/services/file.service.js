@@ -2,14 +2,9 @@ const { v4: uuidv4 } = require('uuid')
 const { supabase }   = require('../lib/db')
 const Groq           = require('groq-sdk')
 const pdfParse       = require('pdf-parse')
-const { File: NodeFile } = require('buffer')
-
-let toFile = null
-try {
-  toFile = require('groq-sdk/uploads').toFile
-} catch {
-  toFile = null
-}
+const fs             = require('fs')
+const path           = require('path')
+const os             = require('os')
 
 const groq   = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'lumen-attachments'
@@ -44,31 +39,29 @@ async function uploadToStorage(buffer, originalName, mimeType, folder = 'uploads
 
 // ── Transcribe audio with Groq Whisper ─────────────────────────────────────
 async function transcribeAudio(buffer, originalName, mimeType) {
-  const file = toFile
-    ? await toFile(buffer, originalName, { type: mimeType })
-    : new NodeFile([buffer], originalName, { type: mimeType })
+  // FIX: استخدام temp file + fs.createReadStream بدل NodeFile/toFile
+  // لأن groq-sdk مصمم يتعامل مع ReadStream مباشرة وده بيحل مشكلة الـ upload
+  const ext     = path.extname(originalName) || '.mp3'
+  const tmpPath = path.join(os.tmpdir(), `groq-audio-${Date.now()}${ext}`)
 
-  // FIX: removed `language: 'ar'` — forcing Arabic caused Whisper to mistranslate
-  // non-Arabic speech and ignore mixed Arabic/English audio correctly.
-  // Whisper auto-detects the language when no `language` param is passed.
-  // FIX: use response_format: 'verbose_json' so result always has a .text field
-  // (plain 'text' format returns a raw string which some SDK versions wrap in an object).
-  const result = await groq.audio.transcriptions.create({
-    file,
-    model:           'whisper-large-v3',
-    response_format: 'verbose_json',
-    prompt:          'This may contain Arabic, English, or mixed Arabic-English project requirements. Preserve names, numbers, prices, dates, platforms, and feature wording exactly.',
-  })
+  try {
+    fs.writeFileSync(tmpPath, buffer)
 
-  // verbose_json always returns an object with .text
-  const text = result && typeof result === 'object' && result.text
-    ? result.text.trim()
-    : typeof result === 'string'
-      ? result.trim()
-      : ''
+    const result = await groq.audio.transcriptions.create({
+      file:            fs.createReadStream(tmpPath),
+      model:           'whisper-large-v3',
+      response_format: 'verbose_json',
+      prompt:          'This may contain Arabic, English, or mixed Arabic-English project requirements. Preserve names, numbers, prices, dates, platforms, and feature wording exactly.',
+    })
 
-  if (!text) throw new Error('Groq transcription returned empty text')
-  return text
+    const text = result?.text?.trim() || ''
+    if (!text) throw new Error('Groq transcription returned empty text')
+    return text
+
+  } finally {
+    // امسح الـ temp file دايماً حتى لو فشل
+    try { fs.unlinkSync(tmpPath) } catch {}
+  }
 }
 
 // ── Extract text from PDF ──────────────────────────────────────────────────
