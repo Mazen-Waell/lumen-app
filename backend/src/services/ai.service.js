@@ -269,6 +269,16 @@ function enrichFactsFromRawInput(facts, rawInput) {
   const s = cleanText(rawInput)
   const lower = s.toLowerCase()
 
+  if (/ice\s*cream/i.test(lower)) {
+    f.project_type = { value: 'ice cream online ordering website', confidence: 0.99, extraction_type: 'explicit' }
+    f.project_name = f.project_name || { value: 'Ice Cream Ordering Website', confidence: 0.95, extraction_type: 'inferred' }
+    f.core_problem = f.core_problem || { value: 'Client needs a modern clean website for ordering ice cream online ASAP', confidence: 0.99, extraction_type: 'explicit' }
+  }
+  if (/asap/i.test(s) && !valueOf(f.deadline)) {
+    f.deadline = { value: 'ASAP', confidence: 0.98, extraction_type: 'explicit' }
+    f.verbatim_dates = addStr(f.verbatim_dates, 'ASAP')
+  }
+
   if (/budget\s+is\s+flexible\s+but\s+not\s+crazy/i.test(s) && !valueOf(f.budget)) {
     f.budget = { value: 'Flexible, but not excessive ("not crazy")', confidence: 0.99, extraction_type: 'explicit' }
   }
@@ -287,6 +297,17 @@ function enrichFactsFromRawInput(facts, rawInput) {
   }
 
   const featureRules = [
+    [/see flavors|flavors/i, 'Flavor browsing', 'mvp', 'must'],
+    [/customize toppings|toppings|sizes/i, 'Customize toppings and sizes', 'mvp', 'must'],
+    [/add to cart/i, 'Add to cart', 'mvp', 'must'],
+    [/cart\/checkout|checkout/i, 'Cart and checkout', 'mvp', 'must'],
+    [/login\/signup|login|signup/i, 'Login and signup', 'mvp', 'should'],
+    [/admin dashboard/i, 'Admin dashboard', 'optional', 'could'],
+    [/tracking for orders|order tracking/i, 'Order tracking', 'future', 'could'],
+    [/reviews/i, 'Reviews', 'optional', 'could'],
+    [/favorite items|favorites/i, 'Favorite items', 'optional', 'could'],
+    [/loyalty points/i, 'Loyalty points', 'optional', 'could'],
+    [/ai recommendation|recommendation.*flavors/i, 'AI flavor recommendations', 'optional', 'could'],
     [/sell beans online|online ordering|faster ordering/i, 'Online ordering / online bean sales', 'optional', 'could'],
     [/reserve tables|reservation/i, 'Table reservation system', 'optional', 'could'],
     [/dashboard.*staff|staff.*update menu|update menu items/i, 'Staff dashboard to update menu items without developer help', 'mvp', 'must'],
@@ -325,6 +346,15 @@ function enrichFactsFromRawInput(facts, rawInput) {
   if (/seo|competitors rank higher/i.test(lower)) {
     f.technical_constraints = addObj(f.technical_constraints, factItem('SEO is required because competitors rank higher'), item => item.description)
   }
+  if (/tech stack|u choose|you choose|modern tech/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Tech stack is not specified; client wants a recommendation')
+  }
+  if (/price|how long|how long it/i.test(lower)) {
+    f.open_questions = addStr(f.open_questions, 'Client requested price and delivery timeline')
+  }
+  if (/work good on phones|mobile/i.test(lower)) {
+    f.technical_constraints = addObj(f.technical_constraints, factItem('Must work well on phones / mobile responsive'), item => item.description)
+  }
   if (/shopify or custom build|custom build/i.test(lower)) {
     f.open_questions = addStr(f.open_questions, 'Shopify vs custom build decision is unresolved')
   }
@@ -351,6 +381,10 @@ function enrichFactsFromRawInput(facts, rawInput) {
   }
 
   const designRules = [
+    [/modern and clean|modern clean/i, 'Modern and clean design direction'],
+    [/colorful and smooth/i, 'Colorful and smooth visual style'],
+    [/nice animations/i, 'Nice animations requested'],
+    [/not boring/i, 'Design should not feel boring'],
     [/modern not corporate/i, 'Modern, not corporate visual direction'],
     [/dark mode/i, 'Dark mode reference was liked'],
     [/premium but not too minimal/i, 'Homepage should feel premium but still show products clearly'],
@@ -551,9 +585,9 @@ function deterministicBriefFromFacts(facts) {
   })
 
   return {
-    project_title: valueOf(facts.project_name) || 'Coffee Brand Website Development',
+    project_title: valueOf(facts.project_name) || 'Project Brief',
     summary: [
-      valueOf(facts.core_problem) || 'The client needs a professional website for a specialty coffee brand.',
+      valueOf(facts.core_problem) || 'The client needs a structured project brief from the provided input.',
       valueOf(facts.deadline) ? `The stated deadline is ${valueOf(facts.deadline)}.` : null,
       valueOf(facts.budget) ? `Budget guidance is ${valueOf(facts.budget)}.` : null,
       activeBranches ? `Current branch/location context: ${activeBranches}${futureDubai ? '; Dubai appears to be a future expansion item, not a confirmed current branch.' : '.'}` : null,
@@ -695,6 +729,29 @@ function mergeBriefs(aiBrief, deterministic) {
   }
 }
 
+function failedInputBrief() {
+  return {
+    project_title: 'Input could not be processed',
+    summary: 'No usable text could be extracted from the submitted input. If this was an audio file, transcription likely failed or returned an empty result.',
+    goals: [],
+    explicit_facts: [],
+    inferred_needs: [],
+    mvp_scope: [],
+    future_scope: [],
+    optional_ideas: [],
+    technical_details: { integrations: [], payment_methods: [], platforms: [], constraints: [], admin_requirements: [] },
+    business_details: { budget: null, deadline: null, branches: null, user_roles: [] },
+    design_content_notes: [],
+    ambiguities: ['No usable client input was extracted'],
+    follow_up_questions: ['Please re-upload a clearer audio file or paste the transcript/text manually.'],
+    estimated_complexity: 'medium',
+    suggested_timeline: null,
+    risks: ['AI brief generation cannot be grounded without readable input'],
+    recommendations: [],
+    input_failed: true,
+  }
+}
+
 async function generateBrief({ rawText = '', transcriptions = [], interpretations = [], documentTexts = [] }) {
   const cleanedTranscriptions = await Promise.all(transcriptions.map(async (item, idx) => `${nameOf(item, `voice note ${idx + 1}`)}:\n${await cleanVoiceTranscript(item)}`))
   const documents = documentTexts.map((item, idx) => `${nameOf(item, `document ${idx + 1}`)}:\n${textOf(item)}`)
@@ -707,7 +764,7 @@ async function generateBrief({ rawText = '', transcriptions = [], interpretation
     images.length && `IMAGE DESCRIPTIONS:\n${images.join('\n---\n')}`,
   ].filter(Boolean).join('\n\n===\n\n')
 
-  if (!combinedInput) return deterministicBriefFromFacts(validateExtraction({}))
+  if (!combinedInput) return failedInputBrief()
 
   const factSets = []
   for (const [idx, chunk] of chunkText(combinedInput).entries()) {

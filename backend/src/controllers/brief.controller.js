@@ -43,6 +43,12 @@ async function create(req, res) {
   const interpretations = attachmentData.filter(a => a.type === 'IMAGE' && a.ai_interpretation).map(a => a.ai_interpretation)
 
   const generated = await generateBrief({ rawText: raw_text_input || '', transcriptions, interpretations, documentTexts })
+  if (generated.input_failed) {
+    return res.status(422).json({
+      error: generated.summary,
+      details: generated.follow_up_questions?.[0] || 'Please provide readable input.',
+    })
+  }
 
   const brief = await Brief.create({
     user_id:        req.user.id,
